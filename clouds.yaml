@@ -1,0 +1,8 @@
+clouds:
+  demo:
+    profile: otc
+    auth:
+      username: nilsmagnus
+      password: ********
+      project_name: eu-de_demo
+      user_domain_name: OTC00000000001000000447

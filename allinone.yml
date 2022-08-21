@@ -1,0 +1,127 @@
+---
+- name: Mein komplettes Playbook
+  hosts: "localhost"
+  vars:
+    router_name:        "my-router"
+    network_name:       "my-network"
+    subnet_name:        "my-subnet"
+    subnet_cidr:        "192.168.1.0/24"
+    subnet_dns_servers: "['100.125.4.25', '8.8.4.4']"
+    enable_snat:        false
+    server_name:        "my-server"
+    region:             "eu-de"
+    az:                 "eu-de-02"
+    server_sg:          "sg-vc-web" # TODO: create
+    image:              "Standard_Ubuntu_20.04_latest"
+#    image:              "Standard_CentOS_8_latest"
+    pubkey_name:        "nils-magnus-otc-4"
+    pubkey:             "ssh-rsa AAAAB3NzaC1yc2EAAAADAQABAAACAQDacIeRXjaX+6MkUnc0ce64g6V5zM7QaOfBg7/XMZX0GTKqvfiRaV5PPok7/887CgMdS0OYNHeDJnYeEFuYHqk4wh0lQTT3EtkP3/O8GJWIy980a8c2NLcLBnWBJp+lanyh3y2ZWPp2jTt48aA+f9Oe5tXQpKqwF70su/VPjNbHBb0xTmUH+S2MC2dU/JGQjU35q4e4o5xSD1AyI6JYqr4hiznrpKKvpmq84I8FY4V9wZ8Ghl+cub1VO/8Yk3hyz703ON2/QBkycKvPbWL/rcyz6ycTUKg3vSYtH5gjuKB0yOOvJY+VpYPn8zMVVtXUEgpf1DYURkJHMaxha60k8HGlH1v9MbsLBL4NFFc19PifS6K/Qi6UeLtcDqzgUNlZo2dkhlJsPl2IJa/49y7VKyJLtF7A36iqXelCqrJTE3WwaX23pWP5cXtu3k/Pl1uZkOmv+zCcJ8tP49tuE0yBBzV4oK49hTSBz8ANjnM9X45n868vjj3bkiADnmgrelBmurqJ1SUnVyB+24sdJBRSmQi7Bb6Am5VKhJOdwHPS3M/r6t9LCitAwHqXMLgqt1vn3uad3Yipxm1eb7Jp51UrlWTRrM1PPgoGagH6/vq9QbL1h2gAYlzFai2eJWe5uieowfX2DIebWHruZiHrmhqGH0CkX18kxQprNe5zC17vL1u8Gw== Nils Magnus (nils.magnus@t-systems.com), +49-170-4189-377, serial 3"
+    systemdisk_size:    "32" # may not work for images
+    flavor:             "s3.medium.4"
+    cloud:              "vaxxchain" # for credentials
+  roles:
+    - { role: opentelekomcloud.vpc, state: 'present' }
+  tasks:
+    - name: 1 | Upload SSH public key
+      openstack.cloud.keypair:
+        name: "{{ pubkey_name }}"
+        public_key: "{{ pubkey }}"
+
+    - name: 2 | Create bastion server
+      openstack.cloud.server:
+        name: "{{ server_name }}"
+        region_name: "{{ region }}"
+        network: "{{ network_name }}"
+        wait: "yes"
+        security_groups: "{{ server_sg }}"
+        availability_zone: "{{ az }}"
+        image: "{{ image }}"
+        key_name: "{{ pubkey_name }}"
+        cloud: "{{ cloud }}"
+        volume_size: "{{ systemdisk_size }}"
+        flavor: "{{ flavor }}"
+      register: returned_server
+
+    - name: 3 | Display my new IP address
+      debug:
+        msg: "Die IP lautet {{ returned_server.server.accessIPv4 }}"
+
+    - name: 4 | Lokalen, alten Hostkey löschen
+      remote_user: magnus
+      delegate_to: localhost
+      command: "ssh-keygen -f /home/magnus/.ssh/known_hosts -R {{ returned_server.server.accessIPv4 }}"
+        
+    - name: 5 | Wait for SSH port become ready
+      delegate_to: "{{ returned_server.server.accessIPv4 }}"
+      remote_user: ubuntu
+      wait_for:
+        port: 22
+        
+    - name: 6 | Alle bestehenden Pakete aktualisieren
+      remote_user: ubuntu
+      become: yes
+      delegate_to: "{{ returned_server.server.accessIPv4 }}"
+      apt:
+        upgrade: dist
+        update_cache: yes
+
+    - name: 7 | Zusätzliche Pakete installieren
+      remote_user: ubuntu
+      become: yes
+      delegate_to: "{{ returned_server.server.accessIPv4 }}"
+      apt:
+        name:
+          - python3-venv
+          - emacs
+
+    - name: 8 | Komische Dateien löschen
+      remote_user: ubuntu
+      become: yes
+      delegate_to: "{{ returned_server.server.accessIPv4 }}"
+      file:
+        path: "{{ item }}"
+        state: absent
+      with_items:
+        - /etc/update-motd.d/10-help-text
+        - /etc/update-motd.d/50-motd-news
+        - /etc/update-motd.d/99-otc-motd
+#       - /etc/sudoers.d/90-cloud-init-users
+        - /home/magnus/.bash_logout
+        - /home/magnus/.ostackrc
+        - /home/magnus/.s3rc
+        
+    - name: 9 | Gruppen anlegen
+      remote_user: ubuntu
+      become: yes
+      delegate_to: "{{ returned_server.server.accessIPv4 }}"
+      group:
+        name: docker
+        
+    - name: 10 | User anlegen
+      remote_user: ubuntu
+      become: yes
+      delegate_to: "{{ returned_server.server.accessIPv4 }}"
+      user:
+        name: magnus
+        comment: Nils Magnus
+        password: $6$Ge3PyABP5Isk9NaK$2CpmDCb2dNGFfgVfs5ZwTHxUibL55AQsPRgzEcuvSu2tGzJfy2wmA9GG05d7VLCa7z4w1.Bh/LgA9rw3KPiQr1
+        shell: /bin/bash
+        groups: admin, docker
+        append: yes
+        
+    - name: 11 | Installiere meinen GitHub SSH-Key in authorized_keys
+      remote_user: ubuntu
+      become: yes
+      delegate_to: "{{ returned_server.server.accessIPv4 }}"
+      authorized_key:
+        user: magnus
+        key: https://github.com/Nils-Magnus.keys
+
+# Aliase hinzufügen
+# Docker installieren
+# Ubuntu-user löschen
+# clouds.yaml installieren
+# pip und virtualenv installieren und einsetzen
+# openstack SDK et al. installieren
+# sshd-Einstellungen überprüfen
+
